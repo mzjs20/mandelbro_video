@@ -22,8 +22,8 @@
 
 1. **克隆仓库**
    ```bash
-   git clone https://github.com/yourusername/mandelbrot-video.git
-   cd mandelbrot-video
+   git clone https://github.com/mzjs20/mandelbro_video.git
+   cd mandelbro_video
    ```
 
 2. **安装依赖**
@@ -31,7 +31,7 @@
    # 安装FFmpeg（如果未安装）
    brew install ffmpeg
    
-   # 安装Xcode命令行工具（如果未安装）
+   # 安装Xcode命令行工具（可选）
    xcode-select --install
    ```
 
