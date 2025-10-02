@@ -1,0 +1,25 @@
+# 视频分辨率
+width = 3840
+height = 2160
+
+# 视频参数 - 改进：使用时长(秒)替代帧数
+duration = 15.0    # 视频时长(秒)
+fps = 60           # 帧率
+output_file = "mandelbrot.mp4"
+
+# 曼德勃罗集参数
+center_x = -0.74364388703
+center_y = 0.13182590421
+start_zoom = 2
+zoom_rate = 3
+max_iterations = 500
+iteration_growth = 1.05
+
+# 渲染参数
+color_palette = "smooth"
+temp_frame_dir = "frames"
+color_smoothing = 0.8
+
+# 并行处理配置
+parallel_color_mapping = true
+parallel_threshold_pixels = 100000000  # 100万像素以上使用并行
