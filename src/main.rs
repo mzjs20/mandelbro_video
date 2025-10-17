@@ -36,34 +36,47 @@ struct MandelbrotConfig {
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct ShaderParams {
-    width: f64,
-    height: f64,
-    center_x: f64,
-    center_y: f64,
-    zoom: f64,
+    width: f32,
+    height: f32,
+    center_x: f32,
+    center_y: f32,
+    zoom: f32,
     max_iterations: u32,
-    fast_escape_threshold: f64,
+    fast_escape_threshold: f32,
+    use_f64: u32,
 }
 unsafe impl Pod for ShaderParams {}
 unsafe impl Zeroable for ShaderParams {}
 
 impl ShaderParams {
-    fn new(width: u32, height: u32, center_x: f64, center_y: f64, zoom: f64, max_iterations: u32) -> Self {
+    fn new(
+        width: u32,
+        height: u32,
+        center_x: f64,
+        center_y: f64,
+        zoom: f64,
+        max_iterations: u32,
+        use_f64: bool
+    ) -> Self {
         Self {
-            width: width as f64,
-            height: height as f64,
-            center_x,
-            center_y,
-            zoom,
+            width: width as f32,
+            height: height as f32,
+            center_x: center_x as f32,
+            center_y: center_y as f32,
+            zoom: zoom as f32,
             max_iterations,
             fast_escape_threshold: 4.0,
+            use_f64: use_f64 as u32,
         }
     }
 }
 
 const WORKGROUP_SIZE: u32 = 16;
 
-fn init_wgpu() -> Result<(wgpu::Device, wgpu::Queue, wgpu::Adapter)> {
+// 新增：控制是否强制使用f64的选项（对于不支持f64的设备会失败）
+const FORCE_F64: bool = false;
+
+fn init_wgpu() -> Result<(wgpu::Device, wgpu::Queue, wgpu::Adapter, bool)> {
     pollster::block_on(async {
         let instance_descriptor = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -86,88 +99,132 @@ fn init_wgpu() -> Result<(wgpu::Device, wgpu::Queue, wgpu::Adapter)> {
         let adapter_info = adapter.get_info();
         let adapter_features = adapter.features();
 
-        if !adapter_features.contains(wgpu::Features::SHADER_F64) {
-            eprintln!("警告：当前GPU不支持f64精度，可能导致画面细节不足");
+        // 检查是否支持f64
+        let supports_f64_hw = adapter_features.contains(wgpu::Features::SHADER_F64);
+        // 根据硬件支持和强制选项决定是否使用f64
+        let use_f64 = FORCE_F64 || supports_f64_hw;
+
+        if FORCE_F64 {
+            println!("强制启用f64精度模式...");
+            if !supports_f64_hw {
+                eprintln!("警告：当前GPU硬件不支持f64精度，强制启用可能导致失败");
+            }
+        } else if !supports_f64_hw {
+            eprintln!("当前GPU不支持f64精度，将使用f32模式运行");
+        } else {
+            println!("GPU支持f64精度，将使用高精度模式运行");
         }
 
         println!("使用适配器: {}", adapter_info.name);
 
+        // 明确声明需要的特性
+        let mut required_features = wgpu::Features::empty();
+        if use_f64 {
+            required_features.insert(wgpu::Features::SHADER_F64);
+        }
+
         let device_descriptor = wgpu::DeviceDescriptor {
             label: Some("Mandelbrot Device"),
-            required_features: if adapter_features.contains(wgpu::Features::SHADER_F64) {
-                wgpu::Features::SHADER_F64
-            } else {
-                wgpu::Features::empty()
-            },
+            required_features,
             required_limits: wgpu::Limits::downlevel_defaults()
                 .using_resolution(adapter.limits()),
             memory_hints: Default::default(),
             trace: Default::default(),
         };
 
-        let (device, queue) = adapter
-            .request_device(&device_descriptor)
-            .await
-            .context("无法创建设备")?;
+        // 尝试创建设备，处理可能的特性不支持错误
+        let (device, queue) = match adapter.request_device(&device_descriptor).await {
+            Ok(result) => result,
+            Err(e) => {
+                if use_f64 {
+                    anyhow::bail!(
+                        "无法创建支持f64的设备，当前GPU可能不支持该特性。错误: {}",
+                        e
+                    );
+                } else {
+                    anyhow::bail!("无法创建设备: {}", e);
+                }
+            }
+        };
 
-        Ok((device, queue, adapter))
+        Ok((device, queue, adapter, use_f64))
     })
 }
 
-fn create_compute_pipeline(device: &wgpu::Device) -> Result<(wgpu::ComputePipeline, wgpu::BindGroupLayout)> {
+fn create_compute_pipeline(
+    device: &wgpu::Device,
+    use_f64: bool
+) -> Result<(wgpu::ComputePipeline, wgpu::BindGroupLayout)> {
+    let (precision_type, param_type) = if use_f64 {
+        ("f64", "f64")
+    } else {
+        ("f32", "f32")
+    };
+
+    // 根据精度类型定义平滑迭代计算的代码
+    let smooth_iter_code = if use_f64 {
+        // f64模式下使用高精度计算
+        "let smooth_iter = f32(f64(iterations) + 1.0 - log_zn);"
+    } else {
+        // f32模式下使用单精度计算
+        "let smooth_iter = f32(iterations) + 1.0 - log_zn;"
+    };
+
     let shader_source = format!(
         r#"
 struct ShaderParams {{
-    width: f64,
-    height: f64,
-    center_x: f64,
-    center_y: f64,
-    zoom: f64,
+    width: f32,
+    height: f32,
+    center_x: {1},
+    center_y: {1},
+    zoom: {1},
     max_iterations: u32,
-    fast_escape_threshold: f64,
+    fast_escape_threshold: f32,
+    use_f64: u32,
 }};
 
 struct MandelbrotResult {{
     iterations: u32,
-    z_re: f64,
-    z_im: f64,
+    z_re: {0},
+    z_im: {0},
 }};
 
 @group(0) @binding(0) var<storage, read_write> output: array<u32>;
 @group(0) @binding(1) var<uniform> params: ShaderParams;
 
-fn mandelbrot(c_re: f64, c_im: f64, max_iter: u32) -> MandelbrotResult {{
-    var z_re: f64 = 0.0;
-    var z_im: f64 = 0.0;
+fn mandelbrot(c_re: {0}, c_im: {0}, max_iter: u32) -> MandelbrotResult {{
+    var z_re: {0} = 0.0;
+    var z_im: {0} = 0.0;
     var iter: u32 = 0u;
-    
-    if c_re * c_re + c_im * c_im > params.fast_escape_threshold {{
+
+    if c_re * c_re + c_im * c_im > {0}(params.fast_escape_threshold) {{
         return MandelbrotResult(0u, z_re, z_im);
     }}
-    
+
     while iter < max_iter {{
         let z_re2 = z_re * z_re;
         let z_im2 = z_im * z_im;
         let z_sum = z_re2 + z_im2;
-        
-        if z_sum > 4.0 {{
+
+        if z_sum > {0}(4.0) {{
             break;
         }}
-        
-        if iter > 100u && z_sum > 100.0 {{
-            iter += u32(log2(z_sum)) / 2u;
+
+        if iter > 100u && z_sum > {0}(100.0) {{
+            let log2_z_sum = log2(z_sum);
+            iter += u32(log2_z_sum / {0}(2.0));
             if iter >= max_iter {{
                 iter = max_iter - 1u;
             }}
             break;
         }}
-        
+
         let new_re = z_re2 - z_im2 + c_re;
-        z_im = 2.0 * z_re * z_im + c_im;
+        z_im = {0}(2.0) * z_re * z_im + c_im;
         z_re = new_re;
         iter += 1u;
     }}
-    
+
     return MandelbrotResult(iter, z_re, z_im);
 }}
 
@@ -179,21 +236,20 @@ fn gamma_correct(value: f32) -> f32 {{
     }}
 }}
 
-fn get_color(iterations: u32, max_iter: u32, z_re: f64, z_im: f64) -> u32 {{
+fn get_color(iterations: u32, max_iter: u32, z_re: {0}, z_im: {0}) -> u32 {{
     if iterations == max_iter {{
         return 0xFF000000u;
     }}
-    
+
     let z_mag = sqrt(z_re * z_re + z_im * z_im);
-    let log_zn = log(log(z_mag) / log(2.0)) / log(2.0);
-    // 修复：将Rust风格的as转换改为WGSL的函数式转换
-    let smooth_iter = f32(f64(iterations) + 1.0 - log_zn);
+    let log_zn = log(log(z_mag) / log({0}(2.0))) / log({0}(2.0));
+    {2}
     let t = smooth_iter / f32(max_iter);
-    
+
     var r: f32;
     var g: f32;
     var b: f32;
-    
+
     if t < 0.16 {{
         let local_t = t / 0.16;
         r = 0.0;
@@ -225,42 +281,46 @@ fn get_color(iterations: u32, max_iter: u32, z_re: f64, z_im: f64) -> u32 {{
         g = 0.75 + 0.25 * local_t;
         b = 0.5 + 0.5 * local_t;
     }}
-    
+
     r = gamma_correct(r) * 255.0;
     g = gamma_correct(g) * 255.0;
     b = gamma_correct(b) * 255.0;
-    
+
     let red = clamp(u32(r), 0u, 255u);
     let green = clamp(u32(g), 0u, 255u);
     let blue = clamp(u32(b), 0u, 255u);
-    
+
     return (0xFFu << 24) | (blue << 16) | (green << 8) | red;
 }}
 
-@compute @workgroup_size({}, {}, 1)
+@compute @workgroup_size({3}, {3}, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {{
     let width = params.width;
     let height = params.height;
-    
+
     if (global_id.x >= u32(width) || global_id.y >= u32(height)) {{
         return;
     }}
-    
+
     let aspect_ratio = height / width;
-    let x = (f64(global_id.x) - width * 0.5) / (width * 0.5) * params.zoom;
-    let y = (f64(global_id.y) - height * 0.5) / (height * 0.5) * params.zoom * aspect_ratio;
-    
-    let c_re = x + params.center_x;
-    let c_im = y + params.center_y;
-    
+
+    let x = (f32(global_id.x) - width * 0.5) / (width * 0.5) * params.zoom;
+    let y = (f32(global_id.y) - height * 0.5) / (height * 0.5) * params.zoom * aspect_ratio;
+
+    let c_re = {0}(params.center_x) + {0}(x);
+    let c_im = {0}(params.center_y) + {0}(y);
+
     let result = mandelbrot(c_re, c_im, params.max_iterations);
     let color = get_color(result.iterations, params.max_iterations, result.z_re, result.z_im);
-    
+
     let index = global_id.y * u32(width) + global_id.x;
     output[index] = color;
 }}
 "#,
-        WORKGROUP_SIZE, WORKGROUP_SIZE
+        precision_type,  // {0} - 计算精度类型
+        param_type,      // {1} - 参数类型
+        smooth_iter_code,// {2} - 平滑迭代计算代码
+        WORKGROUP_SIZE   // {3} - 工作组大小
     );
 
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -320,6 +380,7 @@ fn generate_frame(
     config: &Config,
     zoom: f64,
     current_iterations: u32,
+    use_f64: bool,
 ) -> Result<(Vec<u8>, std::time::Duration)> {
     pollster::block_on(async {
         let width = config.rendering.width;
@@ -332,6 +393,7 @@ fn generate_frame(
             config.mandelbrot.center_y,
             zoom,
             current_iterations,
+            use_f64,
         );
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -404,7 +466,6 @@ fn generate_frame(
             },
         );
 
-        // 处理未使用的Result警告
         let _ = device.poll(wgpu::PollType::Wait);
         receiver.recv().context("缓冲区映射被中断")??;
 
@@ -510,11 +571,11 @@ fn main() -> Result<()> {
     fs::create_dir_all(temp_dir).context("无法创建临时目录")?;
 
     println!("初始化wgpu...");
-    let (device, queue, adapter) = init_wgpu()?;
+    let (device, queue, adapter, use_f64) = init_wgpu()?;
     println!("使用GPU: {}", adapter.get_info().name);
 
     println!("创建计算管线...");
-    let (compute_pipeline, bind_group_layout) = create_compute_pipeline(&device)?;
+    let (compute_pipeline, bind_group_layout) = create_compute_pipeline(&device, use_f64)?;
 
     let progress_bar = ProgressBar::new(config.rendering.total_frames as u64);
     progress_bar.set_style(
@@ -556,6 +617,7 @@ fn main() -> Result<()> {
             &config,
             zoom,
             current_iterations,
+            use_f64,
         )?;
 
         let save_start = Instant::now();
@@ -566,10 +628,11 @@ fn main() -> Result<()> {
         frame_times.push(total_frame_time);
 
         progress_bar.set_message(format!(
-            "帧 {} | 缩放: {:.2e}x | 迭代: {} | GPU: {} | 保存: {}",
+            "帧 {} | 缩放: {:.2e}x | 迭代: {} | 精度: {} | GPU: {} | 保存: {}",
             frame + 1,
             zoom_factor,
             current_iterations,
+            if use_f64 { "f64" } else { "f32" },
             format_duration(&compute_time),
             format_duration(&save_time),
         ));
