@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::fs;
 use std::process::Command;
 use std::time::Instant;
-use wgpu::util::DeviceExt;
+// 移除未使用的导入: use wgpu::util::DeviceExt;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -396,11 +396,21 @@ fn generate_frame(
             use_f64,
         );
 
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        // 修改：使用常规方式创建params_buffer，避免内部映射
+        let params_buffer_size = std::mem::size_of::<ShaderParams>() as wgpu::BufferAddress;
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Params Buffer"),
-            contents: bytemuck::cast_slice(&[params]),
-            usage: wgpu::BufferUsages::UNIFORM,
+            size: params_buffer_size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+
+        // 修复：创建一个持久的数组，避免临时值问题
+        let params_array = [params];
+        let params_bytes = bytemuck::cast_slice(&params_array);
+
+        // 使用write_buffer来初始化数据，而不是通过映射
+        queue.write_buffer(&params_buffer, 0, params_bytes);
 
         let output_size = (width * height * std::mem::size_of::<u32>() as u32) as wgpu::BufferAddress;
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
