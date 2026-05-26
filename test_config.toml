@@ -1,0 +1,20 @@
+# 测试配置 - 生成5秒视频（快速测试）
+
+[video]
+width = 640
+height = 360
+fps = 24
+duration_seconds = 3
+output = "test_mandelbrot.mp4"
+
+[zoom]
+preset = "Seahorse"
+
+[render]
+max_iter_base = 128
+color_scheme = "Classic"
+force_cpu = false
+
+[encoding]
+speed_preset = 6
+quantizer = 30

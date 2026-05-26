@@ -1,14 +1,27 @@
-[rendering]
-width = 3840
-height = 2160
-fps = 60
-total_frames = 300
+# Mandelbrot分形视频生成器配置
 
-[mandelbrot]
-center_x = -0.74364388703
-center_y = 0.13182590421
-initial_radius = 2.0
-zoom_factor = 1.04
-initial_iterations = 2000
-max_iterations = 100000
-iteration_growth_factor = 1.01
+[video]
+width = 1920
+height = 1080
+fps = 30
+duration_seconds = 60
+output = "mandelbrot_zoom.mp4"
+
+[zoom]
+# 预设位置: "seahorse", "elephant", "triple_spiral", "mini_mandelbrot", "custom"
+preset = "Seahorse"
+# 自定义位置时使用以下参数:
+# center_re = -0.743643887037151
+# center_im = 0.131825904205330
+# initial_zoom = 1.0
+# final_zoom = 1e14
+
+[render]
+max_iter_base = 256
+color_scheme = "Classic"
+# 颜色方案: "classic", "fire", "ocean", "rainbow", "electric", "grayscale"
+force_cpu = false  # 强制使用CPU（用于调试或无GPU环境）
+
+[encoding]
+speed_preset = 6  # 0-10, 0=最慢最高质量, 10=最快
+quantizer = 50    # 质量参数，越低质量越高 (0-255)
