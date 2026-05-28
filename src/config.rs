@@ -1,7 +1,8 @@
 use serde::Deserialize;
 
-/// 预设缩放位置
+/// 预设缩放位置（不区分大小写）
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ZoomPreset {
     /// 海马谷 - 经典美丽位置
     Seahorse,
@@ -46,8 +47,9 @@ impl ZoomPreset {
     }
 }
 
-/// 颜色方案
+/// 颜色方案（不区分大小写）
 #[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum ColorScheme {
     #[default]
     Classic,

@@ -11,8 +11,8 @@ struct Params {
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read_write> output: array<vec4<u32>>;
-@group(0) @binding(2) var<storage, read> color_lut: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read_write> output: array<u32>;
+@group(0) @binding(2) var<storage, read> color_lut: array<u32>;
 
 // 主心形检测
 fn in_main_cardioid(c_re: f32, c_im: f32) -> bool {
@@ -79,7 +79,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let iter = mandelbrot(c_re, c_im, params.max_iter);
 
-    // 从颜色查找表获取颜色
+    // 从颜色查找表获取颜色 (每个u32存储一个RGBA颜色)
     let color = color_lut[iter];
     let idx = y * params.width + x;
     output[idx] = color;

@@ -4,12 +4,12 @@
 width = 1920
 height = 1080
 fps = 30
-duration_seconds = 60
+duration_seconds = 30
 output = "mandelbrot_zoom.mp4"
 
 [zoom]
-# 预设位置: "seahorse", "elephant", "triple_spiral", "mini_mandelbrot", "custom"
-preset = "Seahorse"
+# 预设位置: "seahorse", "elephant", "triplespiral", "minimandelbrot", "custom"
+preset = "triplespiral"
 # 自定义位置时使用以下参数:
 # center_re = -0.743643887037151
 # center_im = 0.131825904205330
@@ -18,10 +18,9 @@ preset = "Seahorse"
 
 [render]
 max_iter_base = 256
-color_scheme = "Classic"
+color_scheme = "classic"
 # 颜色方案: "classic", "fire", "ocean", "rainbow", "electric", "grayscale"
 force_cpu = false  # 强制使用CPU（用于调试或无GPU环境）
 
 [encoding]
-speed_preset = 6  # 0-10, 0=最慢最高质量, 10=最快
-quantizer = 50    # 质量参数，越低质量越高 (0-255)
+quantizer = 18    # 质量参数，越低质量越高 (推荐: 18-23)

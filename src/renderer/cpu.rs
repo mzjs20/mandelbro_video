@@ -9,16 +9,13 @@ use std::simd::cmp::SimdPartialOrd;
 use rayon::prelude::*;
 use indicatif::{ProgressBar, ProgressStyle};
 
-/// 优化的Mandelbrot计算（主心形检测 + 周期性检测）
+/// 标量 Mandelbrot 计算（用于残余像素）
 #[inline(always)]
 fn mandelbrot(c_re: f64, c_im: f64, max_iter: u32) -> u32 {
-    // 主心形检测
     let q = (c_re - 0.25).powi(2) + c_im.powi(2);
     if q * (q + (c_re - 0.25)) <= 0.25 * c_im.powi(2) {
         return max_iter;
     }
-
-    // 周期2圆盘检测
     if (c_re + 1.0).powi(2) + c_im.powi(2) <= 0.0625 {
         return max_iter;
     }
@@ -41,7 +38,6 @@ fn mandelbrot(c_re: f64, c_im: f64, max_iter: u32) -> u32 {
         z_re = z_re_squared - z_im_squared + c_re;
         z_im = z_im_new;
 
-        // 周期性检测
         if z_re == z_re_old && z_im == z_im_old {
             return max_iter;
         }
@@ -57,7 +53,7 @@ fn mandelbrot(c_re: f64, c_im: f64, max_iter: u32) -> u32 {
     max_iter
 }
 
-/// SIMD Mandelbrot 计算（f64x4，4 个像素同时迭代）
+/// SIMD Mandelbrot 计算（f64x4）
 #[inline(always)]
 fn mandelbrot_simd_f64x4(
     c_re: f64x4,
@@ -71,12 +67,10 @@ fn mandelbrot_simd_f64x4(
     let quarter = f64x4::splat(0.25);
     let point0625 = f64x4::splat(0.0625);
 
-    // 心形检测（SIMD）
     let c_re_shifted = c_re - quarter;
     let q = c_re_shifted * c_re_shifted + c_im * c_im;
     let in_cardioid = q.simd_le(q * c_re_shifted + quarter * c_im * c_im);
 
-    // 周期2圆盘检测（SIMD）
     let c_re_plus1 = c_re + one;
     let in_bulb = (c_re_plus1 * c_re_plus1 + c_im * c_im).simd_le(point0625);
 
@@ -118,12 +112,14 @@ fn mandelbrot_simd_f64x4(
     iter_count.to_array()
 }
 
-/// SIMD 渲染器
+/// SIMD 渲染器（带 LUT 缓存）
 pub struct SimdRenderer {
     width: u32,
     height: u32,
     color_scheme: ColorScheme,
     aspect_ratio: f64,
+    cached_lut: Vec<[u8; 3]>,
+    cached_max_iter: u32,
 }
 
 impl SimdRenderer {
@@ -133,6 +129,8 @@ impl SimdRenderer {
             height,
             color_scheme,
             aspect_ratio: width as f64 / height as f64,
+            cached_lut: Vec::new(),
+            cached_max_iter: 0,
         }
     }
 }
@@ -156,7 +154,12 @@ impl Renderer for SimdRenderer {
         let pixel_width = x_range / self.width as f64;
         let pixel_height = y_range / self.height as f64;
 
-        let lut = generate_color_lut(max_iter, self.color_scheme);
+        // LUT 缓存：max_iter 不变时复用
+        if max_iter != self.cached_max_iter || self.cached_lut.is_empty() {
+            self.cached_lut = generate_color_lut(max_iter, self.color_scheme);
+            self.cached_max_iter = max_iter;
+        }
+        let lut = &self.cached_lut;
 
         let mut raw_pixels = vec![0u8; width * height * 3];
 

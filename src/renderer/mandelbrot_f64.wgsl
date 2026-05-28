@@ -11,8 +11,8 @@ struct Params {
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read_write> output: array<vec4<u32>>;
-@group(0) @binding(2) var<storage, read> color_lut: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read_write> output: array<u32>;
+@group(0) @binding(2) var<storage, read> color_lut: array<u32>;
 
 // 主心形检测
 fn in_main_cardioid(c_re: f64, c_im: f64) -> bool {

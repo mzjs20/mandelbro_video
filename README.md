@@ -6,15 +6,16 @@
 
 - **自动 GPU/CPU 切换**：检测 GPU 的 f64 精度支持，自动选择最佳渲染模式
 - **GPU 加速**：使用 wgpu compute shader 进行 GPU 计算（支持 f64 时）
-- **CPU 并行**：使用 Rayon 多线程并行计算（GPU 不支持 f64 时回退）
-- **优化算法**：主心形检测、周期2圆盘检测、周期性检测
+- **CPU SIMD 加速**：使用 `std::simd` f64x4 向量化计算，比标量 CPU 快约 2.4x（需 nightly Rust）
+- **CPU 并行**：使用 Rayon 多线程并行计算
+- **优化算法**：主心形检测、周期2圆盘检测
 - **多种编码格式**：支持 MP4 (H.264)、WebM (VP9)、IVF (AV1)、MKV
 - **预设位置**：内置多个经典分形位置（海马谷、大象谷、三重螺旋等）
 - **可配置**：通过 TOML 配置文件自定义所有参数
 
 ## 依赖
 
-- Rust 1.70+
+- Rust nightly（SIMD 需要 `#![feature(portable_simd)]`）
 - FFmpeg（用于视频编码）
 
 ## 安装
@@ -22,6 +23,7 @@
 ```bash
 git clone <repo>
 cd mandelbro_video
+rustup default nightly
 cargo build --release
 ```
 
@@ -29,10 +31,10 @@ cargo build --release
 
 ```bash
 # 使用默认配置
-cargo run --release
+cargo +nightly run --release
 
 # 使用指定配置文件
-cargo run --release -- test_config.toml
+cargo +nightly run --release -- test_config.toml
 ```
 
 ## 配置文件
@@ -83,23 +85,36 @@ quantizer = 50         # 质量参数（越低质量越高，0-255）
 
 ## 性能
 
-- 1080p 60秒视频（1800帧）
-- CPU 模式（Rayon 多线程）：约 5-10 分钟
-- GPU 模式（f64 shader）：约 1-3 分钟
+1280x720 10秒视频（300帧，Seahorse 预设）：
+
+| 渲染器 | 时间 | 备注 |
+|--------|------|------|
+| CPU 标量 (Rayon) | 416s | 基准 |
+| CPU SIMD + Rayon | 171s | 约 2.4x 加速 |
+| GPU (f64 shader) | ~1-3分钟 | 需要 GPU f64 支持 |
 
 ## 技术架构
 
 ```
 src/
-├── main.rs           # 入口，GPU 检测，主循环
+├── main.rs           # 入口，GPU 检测，#![feature(portable_simd)]
 ├── config.rs         # 配置结构和预设
 ├── renderer/
 │   ├── mod.rs        # Renderer trait，颜色映射
 │   ├── gpu.rs        # wgpu GPU 实现
-│   └── cpu.rs        # Rayon CPU 实现
+│   └── cpu.rs        # 标量 CPU + SIMD (f64x4) 实现
 ├── encoder.rs        # FFmpeg 管道编码
 └── zoom.rs           # 缩放动画计算
 ```
+
+### SIMD 实现原理
+
+`f64x4` 同时处理 4 个像素的 Mandelbrot 迭代：
+- 每个 lane 独立的 c_re/c_im/z_re/z_im
+- 共享循环计数器，用 Mask 标记已逃逸 lane
+- 心形/周期2检测同样 SIMD 化
+- 活跃 lane 继续迭代，逃逸 lane 空转直至全部完成
+- 残余像素（width 不是 4 的倍数）用标量函数处理
 
 ## 许可证
 

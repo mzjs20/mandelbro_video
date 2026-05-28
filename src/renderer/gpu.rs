@@ -105,7 +105,7 @@ impl GpuRenderer {
         let output_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Output Buffer"),
             size: output_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::MAP_READ,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -211,10 +211,15 @@ impl GpuRenderer {
             self.queue.write_buffer(&self.params_buffer, 0, &params);
         }
 
-        // 更新颜色查找表
+        // 更新颜色查找表 (每个颜色用u32存储，小端序: R G B 0)
         let lut = generate_color_lut(state.max_iter.min(10000), self.color_scheme);
         let lut_bytes: Vec<u8> = lut.iter()
-            .flat_map(|c| [c[0], c[1], c[2], 0u8])
+            .map(|c| {
+                // 小端序: R G B 0 (这样读取时 chunk[0]=R, chunk[1]=G, chunk[2]=B)
+                let color: u32 = (c[0] as u32) | ((c[1] as u32) << 8) | ((c[2] as u32) << 16);
+                color
+            })
+            .flat_map(|c| c.to_le_bytes())
             .collect();
         self.queue.write_buffer(&self.color_lut_buffer, 0, &lut_bytes);
     }
