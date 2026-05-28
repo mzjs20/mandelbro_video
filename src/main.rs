@@ -1,10 +1,11 @@
+#![feature(portable_simd)]
 mod config;
 mod renderer;
 mod encoder;
 mod zoom;
 
 use config::Config;
-use renderer::{Renderer, gpu::GpuRenderer, cpu::CpuBatchRenderer};
+use renderer::{Renderer, gpu::GpuRenderer, cpu::SimdBatchRenderer};
 use encoder::Av1Encoder;
 use zoom::ZoomAnimation;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -122,14 +123,14 @@ fn render_with_gpu(config: &Config, zoom_anim: ZoomAnimation, total_frames: u32)
 }
 
 fn render_with_cpu(config: &Config, zoom_anim: ZoomAnimation, total_frames: u32) -> Result<()> {
-    let mut batch_renderer = CpuBatchRenderer::new(
+    let mut batch_renderer = SimdBatchRenderer::new(
         config.video.width,
         config.video.height,
         config.render.color_scheme,
         total_frames,
     );
 
-    log::info!("渲染器: CPU (Rayon多线程)");
+    log::info!("渲染器: CPU (SIMD + Rayon多线程)");
 
     // 收集所有帧
     let mut frames: Vec<Vec<u8>> = Vec::with_capacity(total_frames as usize);

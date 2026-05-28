@@ -1,89 +1,13 @@
 use crate::config::ColorScheme;
 use crate::zoom::{ZoomState, ZoomAnimation};
 use crate::renderer::{Renderer, generate_color_lut};
+use std::simd::f64x4;
+use std::simd::u32x4;
+use std::simd::Mask;
+use std::simd::Select;
+use std::simd::cmp::SimdPartialOrd;
 use rayon::prelude::*;
 use indicatif::{ProgressBar, ProgressStyle};
-
-/// CPU渲染器
-pub struct CpuRenderer {
-    width: u32,
-    height: u32,
-    color_scheme: ColorScheme,
-    aspect_ratio: f64,
-}
-
-impl CpuRenderer {
-    pub fn new(width: u32, height: u32, color_scheme: ColorScheme) -> Self {
-        Self {
-            width,
-            height,
-            color_scheme,
-            aspect_ratio: width as f64 / height as f64,
-        }
-    }
-}
-
-impl Renderer for CpuRenderer {
-    fn render(&mut self, state: &ZoomState) -> anyhow::Result<Vec<u8>> {
-        let anim = ZoomAnimation::new(
-            &crate::config::ZoomConfig::default(),
-            1,
-            state.max_iter,
-        );
-
-        let (x_min, x_max, y_min, y_max) = anim.get_view_bounds(state, self.aspect_ratio);
-
-        let width = self.width as usize;
-        let height = self.height as usize;
-        let max_iter = state.max_iter;
-
-        let x_range = x_max - x_min;
-        let y_range = y_max - y_min;
-        let pixel_width = x_range / self.width as f64;
-        let pixel_height = y_range / self.height as f64;
-
-        // 预计算颜色查找表
-        let lut = generate_color_lut(max_iter, self.color_scheme);
-
-        // 预分配像素内存
-        let mut raw_pixels = vec![0u8; width * height * 3];
-
-        // 粗粒度并行处理
-        let chunk_rows: usize = 8;
-        let chunk_size = width * 3 * chunk_rows;
-
-        raw_pixels
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, chunk_slice)| {
-                let start_y = chunk_idx * chunk_rows;
-                let actual_rows = chunk_slice.len() / (width * 3);
-
-                for y_offset in 0..actual_rows {
-                    let y = start_y + y_offset;
-                    let c_im = y_min + y as f64 * pixel_height;
-                    let row_start = y_offset * (width * 3);
-
-                    for x in 0..width {
-                        let c_re = x_min + x as f64 * pixel_width;
-                        let iter = mandelbrot(c_re, c_im, max_iter) as usize;
-                        let color = &lut[iter];
-
-                        let idx = row_start + x * 3;
-                        chunk_slice[idx] = color[0];
-                        chunk_slice[idx + 1] = color[1];
-                        chunk_slice[idx + 2] = color[2];
-                    }
-                }
-            });
-
-        Ok(raw_pixels)
-    }
-
-    fn name(&self) -> &'static str {
-        "CPU (Rayon)"
-    }
-}
 
 /// 优化的Mandelbrot计算（主心形检测 + 周期性检测）
 #[inline(always)]
@@ -133,15 +57,168 @@ fn mandelbrot(c_re: f64, c_im: f64, max_iter: u32) -> u32 {
     max_iter
 }
 
-/// 批量渲染多帧（用于视频生成）
-pub struct CpuBatchRenderer {
-    renderer: CpuRenderer,
+/// SIMD Mandelbrot 计算（f64x4，4 个像素同时迭代）
+#[inline(always)]
+fn mandelbrot_simd_f64x4(
+    c_re: f64x4,
+    c_im: f64x4,
+    max_iter: u32,
+) -> [u32; 4] {
+    let zero = f64x4::splat(0.0);
+    let one = f64x4::splat(1.0);
+    let two = f64x4::splat(2.0);
+    let four = f64x4::splat(4.0);
+    let quarter = f64x4::splat(0.25);
+    let point0625 = f64x4::splat(0.0625);
+
+    // 心形检测（SIMD）
+    let c_re_shifted = c_re - quarter;
+    let q = c_re_shifted * c_re_shifted + c_im * c_im;
+    let in_cardioid = q.simd_le(q * c_re_shifted + quarter * c_im * c_im);
+
+    // 周期2圆盘检测（SIMD）
+    let c_re_plus1 = c_re + one;
+    let in_bulb = (c_re_plus1 * c_re_plus1 + c_im * c_im).simd_le(point0625);
+
+    let skip = in_cardioid | in_bulb;
+
+    let mut z_re = zero;
+    let mut z_im = zero;
+    let mut iter_count = u32x4::splat(max_iter);
+    let mut active: Mask<i64, 4> = !skip;
+
+    if !active.any() {
+        return iter_count.to_array();
+    }
+
+    for i in 0..max_iter {
+        let z_re_sq = z_re * z_re;
+        let z_im_sq = z_im * z_im;
+        let mag_sq = z_re_sq + z_im_sq;
+
+        let escaped = mag_sq.simd_gt(four);
+        let newly_escaped = escaped & active;
+
+        if newly_escaped.any() {
+            iter_count = newly_escaped.select(u32x4::splat(i), iter_count);
+        }
+
+        active = active & !escaped;
+
+        if !active.any() {
+            break;
+        }
+
+        let z_im_new = two * z_re * z_im + c_im;
+        let z_re_new = z_re_sq - z_im_sq + c_re;
+        z_re = active.select(z_re_new, z_re);
+        z_im = active.select(z_im_new, z_im);
+    }
+
+    iter_count.to_array()
+}
+
+/// SIMD 渲染器
+pub struct SimdRenderer {
+    width: u32,
+    height: u32,
+    color_scheme: ColorScheme,
+    aspect_ratio: f64,
+}
+
+impl SimdRenderer {
+    pub fn new(width: u32, height: u32, color_scheme: ColorScheme) -> Self {
+        Self {
+            width,
+            height,
+            color_scheme,
+            aspect_ratio: width as f64 / height as f64,
+        }
+    }
+}
+
+impl Renderer for SimdRenderer {
+    fn render(&mut self, state: &ZoomState) -> anyhow::Result<Vec<u8>> {
+        let anim = ZoomAnimation::new(
+            &crate::config::ZoomConfig::default(),
+            1,
+            state.max_iter,
+        );
+
+        let (x_min, x_max, y_min, y_max) = anim.get_view_bounds(state, self.aspect_ratio);
+
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let max_iter = state.max_iter;
+
+        let x_range = x_max - x_min;
+        let y_range = y_max - y_min;
+        let pixel_width = x_range / self.width as f64;
+        let pixel_height = y_range / self.height as f64;
+
+        let lut = generate_color_lut(max_iter, self.color_scheme);
+
+        let mut raw_pixels = vec![0u8; width * height * 3];
+
+        let simd_width = width / 4;
+        let remainder = width % 4;
+
+        raw_pixels
+            .par_chunks_mut(width * 3)
+            .enumerate()
+            .for_each(|(y, row_slice)| {
+                let c_im = y_min + y as f64 * pixel_height;
+
+                for sx in 0..simd_width {
+                    let x_base = sx * 4;
+                    let c_re = f64x4::from_array([
+                        x_min + (x_base) as f64 * pixel_width,
+                        x_min + (x_base + 1) as f64 * pixel_width,
+                        x_min + (x_base + 2) as f64 * pixel_width,
+                        x_min + (x_base + 3) as f64 * pixel_width,
+                    ]);
+                    let c_im_vec = f64x4::splat(c_im);
+
+                    let iters = mandelbrot_simd_f64x4(c_re, c_im_vec, max_iter);
+
+                    for lane in 0..4 {
+                        let x = x_base + lane;
+                        let color = &lut[iters[lane] as usize];
+                        let idx = x * 3;
+                        row_slice[idx] = color[0];
+                        row_slice[idx + 1] = color[1];
+                        row_slice[idx + 2] = color[2];
+                    }
+                }
+
+                for x in simd_width * 4..simd_width * 4 + remainder {
+                    let c_re = x_min + x as f64 * pixel_width;
+                    let iter = mandelbrot(c_re, c_im, max_iter) as usize;
+                    let color = &lut[iter];
+                    let idx = x * 3;
+                    row_slice[idx] = color[0];
+                    row_slice[idx + 1] = color[1];
+                    row_slice[idx + 2] = color[2];
+                }
+            });
+
+        Ok(raw_pixels)
+    }
+
+    fn name(&self) -> &'static str {
+        "CPU (SIMD)"
+    }
+}
+
+/// SIMD 批量渲染器
+pub struct SimdBatchRenderer {
+    renderer: SimdRenderer,
     progress_bar: ProgressBar,
 }
 
-impl CpuBatchRenderer {
+impl SimdBatchRenderer {
     pub fn new(width: u32, height: u32, color_scheme: ColorScheme, total_frames: u32) -> Self {
-        let renderer = CpuRenderer::new(width, height, color_scheme);
+        let renderer = SimdRenderer::new(width, height, color_scheme);
         let progress_bar = ProgressBar::new(total_frames as u64);
         progress_bar.set_style(
             ProgressStyle::default_bar()
