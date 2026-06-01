@@ -2,3 +2,5 @@
 /target
 /temp_frames
 mandelbrot_zoom.mp4
+test_mandelbrot.mp4
+*.mp4

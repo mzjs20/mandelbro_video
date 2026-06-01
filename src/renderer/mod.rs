@@ -1,5 +1,6 @@
 pub mod cpu;
 pub mod gpu;
+pub mod perturbation;
 
 use anyhow::Result;
 use crate::config::ColorScheme;

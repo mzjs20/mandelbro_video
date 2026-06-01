@@ -14,6 +14,7 @@ preset = "seahorse"
 max_iter_base = 256
 color_scheme = "classic"
 force_cpu = true
+use_perturbation = true
 
 [encoding]
 quantizer = 18

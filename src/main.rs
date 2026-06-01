@@ -5,7 +5,7 @@ mod encoder;
 mod zoom;
 
 use config::Config;
-use renderer::{Renderer, gpu::GpuRenderer, cpu::SimdBatchRenderer};
+use renderer::{Renderer, gpu::GpuRenderer, cpu::{SimdBatchRenderer, PerturbationBatchRenderer}};
 use encoder::Av1Encoder;
 use zoom::ZoomAnimation;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -47,7 +47,9 @@ fn main() -> Result<()> {
         }
     };
 
-    if use_gpu {
+    if config.render.use_perturbation {
+        render_with_perturbation(&config, zoom_anim, total_frames)?;
+    } else if use_gpu {
         render_with_gpu(&config, zoom_anim, total_frames)?;
     } else {
         render_with_cpu(&config, zoom_anim, total_frames)?;
@@ -106,6 +108,52 @@ fn render_with_cpu(config: &Config, zoom_anim: ZoomAnimation, total_frames: u32)
     );
 
     log::info!("渲染器: CPU (SIMD + Rayon多线程)");
+
+    let mut encoder = Av1Encoder::start(
+        config.video.width,
+        config.video.height,
+        config.video.fps,
+        total_frames,
+        config.video.output.clone(),
+        config.encoding.clone(),
+    ).context("创建编码器失败")?;
+
+    for frame_idx in 0..total_frames {
+        let state = zoom_anim.get_frame(frame_idx);
+        let frame_data = batch_renderer.render_frame(&state)
+            .with_context(|| format!("渲染帧 {} 失败", frame_idx))?;
+        encoder.push_frame(&frame_data)
+            .with_context(|| format!("编码帧 {} 失败", frame_idx))?;
+    }
+
+    batch_renderer.finish();
+    encoder.finish()?;
+    Ok(())
+}
+
+fn render_with_perturbation(config: &Config, zoom_anim: ZoomAnimation, total_frames: u32) -> Result<()> {
+    let (center_re, center_im, _, final_zoom) = config.zoom.get_actual_params();
+
+    // 计算 max_orbit_iter：取缩放动画中的最大迭代数
+    let max_orbit_iter = (0..total_frames)
+        .map(|i| zoom_anim.get_frame(i).max_iter)
+        .max()
+        .unwrap_or(config.render.max_iter_base);
+
+    log::info!("扰动渲染最大参考轨道迭代数: {}, 最终缩放: {}", max_orbit_iter, final_zoom);
+
+    let mut batch_renderer = PerturbationBatchRenderer::new(
+        config.video.width,
+        config.video.height,
+        config.render.color_scheme,
+        total_frames,
+        max_orbit_iter,
+        final_zoom,
+        center_re,
+        center_im,
+    );
+
+    log::info!("渲染器: CPU (Perturbation Theory)");
 
     let mut encoder = Av1Encoder::start(
         config.video.width,

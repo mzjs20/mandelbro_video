@@ -28,7 +28,7 @@ impl ZoomPreset {
         match self {
             // (center_re, center_im, initial_zoom, final_zoom)
             ZoomPreset::Seahorse => {
-                (-0.743643887037151, 0.131825904205330, 1.0, 1e14)
+                (-0.743643887087151, 0.131825904205330, 1e8, 1e22)
             }
             ZoomPreset::Elephant => {
                 (0.275, 0.0, 1.0, 1e10)
@@ -144,6 +144,9 @@ pub struct RenderConfig {
     /// 是否强制使用CPU（用于调试）
     #[serde(default)]
     pub force_cpu: bool,
+    /// 是否使用扰动理论加速（深度缩放时推荐）
+    #[serde(default)]
+    pub use_perturbation: bool,
 }
 
 fn default_max_iter_base() -> u32 { 256 }
@@ -154,6 +157,7 @@ impl Default for RenderConfig {
             max_iter_base: default_max_iter_base(),
             color_scheme: ColorScheme::default(),
             force_cpu: false,
+            use_perturbation: false,
         }
     }
 }

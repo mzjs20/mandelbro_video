@@ -26,6 +26,9 @@ toml = "0.8"
 # 进度显示
 indicatif = { version = "0.17", features = ["rayon"] }
 
+# 高精度算术（扰动理论参考轨道计算）
+rug = "1.30"
+
 # 错误处理
 anyhow = "1.0"
 thiserror = "1.0"

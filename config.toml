@@ -21,6 +21,7 @@ max_iter_base = 256
 color_scheme = "classic"
 # 颜色方案: "classic", "fire", "ocean", "rainbow", "electric", "grayscale"
 force_cpu = false  # 强制使用CPU（用于调试或无GPU环境）
+use_perturbation = true  # 使用扰动理论加速（深度缩放时推荐）
 
 [encoding]
 quantizer = 18    # 质量参数，越低质量越高 (推荐: 18-23)
